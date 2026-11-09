@@ -108,6 +108,18 @@ Debit and credit are two steps in the same database on purpose. It gives one par
 
 Every step has a compensation, including the last one. The orchestrator compensates a step whose outcome is unknown (retries exhausted), so the last step must be undoable too. A reversed credit can leave the destination balance negative: it is a bank correction, not a customer debit, and it is allowed.
 
+### 5.5 Database access library
+
+| Option | Type-safe SQL | Postgres features used here | Maps into records | Joins the Spring transaction |
+|---|---|---|---|---|
+| **jOOQ** | Yes, generated classes | All, `SKIP LOCKED` and `ON CONFLICT` in the DSL, the advisory lock as a template | Yes | Yes, through Boot's auto-configuration |
+| JDBI 3 | No, SQL strings | All | Yes | Through the `jdbi3-spring` bridge |
+| Spring Data JDBC | Derived queries only | No `SKIP LOCKED`, no advisory lock | Yes | Yes |
+| Spring Data JPA | Criteria API | Through hints and native queries | No, entities cannot be records | Yes |
+| `JdbcClient` | No, SQL strings | All | By hand | Yes |
+
+Decision: **jOOQ**. Each module generates its table classes from a real Postgres migrated by Flyway (`make jooq`), and the generated sources are committed. `make jooq-check` fails when they drift from the migrations. Migration plan and full trade-offs: [`jooq-migration-plan.md`](jooq-migration-plan.md).
+
 ---
 
 ## 6. Proposed design
@@ -171,11 +183,11 @@ Packages per service, layered, with a pure domain in the orchestrator:
 |---|---|---|
 | `transfer.domain` | `TransferSaga`, statuses, `Transition`. The step order is the declaration order of `Step`. No Spring, no JDBC, no Jackson | `messaging.contract` |
 | `transfer.app` | Runs each transition in one transaction: lock, decide, save, append events, write commands | `domain`, `persistence`, `messaging` |
-| `transfer.persistence` | `JdbcClient` stores for sagas, steps and events | `domain` |
+| `transfer.persistence` | jOOQ stores for sagas, steps and events. Generated table classes in `persistence.db` | `domain` |
 | `transfer.api` | Controllers, SSE hub, request records, scenario catalog | `app`, `domain`, `persistence` for read views |
 | `account`, `risk` | One `StepHandler` per service, one store, one controller. Flat package, small enough | `messaging` |
 
-ArchUnit tests keep `transfer.domain` free of Spring, Jackson and JDBC, and keep `persistence` and `app` from reaching up.
+ArchUnit tests keep `transfer.domain` free of Spring, Jackson, JDBC and jOOQ, keep jOOQ inside `transfer.persistence`, and keep `persistence` and `app` from reaching up.
 
 ### 6.4 Saga state machine
 
@@ -541,6 +553,7 @@ Checked on Maven Central, npm and Docker Hub on 2026-11-09. **BOM** means from `
 | Java (Temurin) | 25 | LTS |
 | Spring Boot | 4.1.2 | Parent of every module |
 | Spring Framework, Spring Kafka, Jackson 3, Flyway, PostgreSQL JDBC, HikariCP, Micrometer | BOM | |
+| jOOQ | BOM (3.21.9) | Open-source edition. Code generated from a Flyway-migrated Postgres into `src/generated/java` |
 | PostgreSQL image | `postgres:18.6` | One instance, three databases |
 | Kafka image | `apache/kafka:4.4.0` | KRaft, single broker |
 | Node | 26 | `web` build |
@@ -599,7 +612,7 @@ Ports: `web` 8080, `transfer-service` 8081, `account-service` 8082, `risk-servic
 |---|---|---|
 | Unit | Every transition of `TransferSaga` | Plain JUnit, one test per scenario path |
 | Property | For any failing step and any applied set, compensations run in strict reverse order and only for applied or unknown steps | jqwik |
-| Architecture | `transfer.domain` imports no framework | ArchUnit |
+| Architecture | `transfer.domain` imports no framework, jOOQ stays in `transfer.persistence` | ArchUnit |
 | Participant runtime | Duplicate execute, compensate before execute, late execute after tombstone, both faults | Postgres Testcontainer, fake handler |
 | Relay | Row in, message on the topic, row gone | Postgres and Kafka Testcontainers |
 | Orchestrator | Full saga with scripted participants on real Kafka | Postgres and Kafka Testcontainers |
@@ -615,6 +628,8 @@ Ports: `web` 8080, `transfer-service` 8081, `account-service` 8082, `risk-servic
 make up        # postgres, kafka, three services, web on http://localhost:8080
 make e2e       # every scenario, expected status, money conservation
 make test      # Maven verify (Docker needed for Testcontainers) and web tests
+make jooq      # regenerate the jOOQ classes after a migration
+make jooq-check  # fail if the committed jOOQ classes differ from the migrations
 make down
 ```
 
@@ -645,6 +660,10 @@ See [§5.1](#51-orchestration-not-choreography).
 
 **What:** consume, produce and commit offsets in one Kafka transaction.
 **Why not:** the database write is outside the Kafka transaction, so it does not give exactly once end to end. The idempotent participant does.
+
+### 11.6 JDBI, Spring Data JDBC or JPA instead of jOOQ
+
+See [§5.5](#55-database-access-library). JDBI keeps SQL in strings. Spring Data JDBC rewrites every child row of an aggregate on save and has no `SKIP LOCKED`. JPA needs a second model beside the domain records and hides when SQL runs, which the outbox depends on.
 
 ---
 

@@ -117,6 +117,7 @@ Full trade-off tables in the [SDD](docs/SDD.md).
 | Idempotency key | `(saga_id, step)` in each participant | Business key, durable, doubles as the stored reply and the tombstone |
 | Exactly once | Not attempted | At least once delivery plus idempotent participants |
 | Retries | Wait doubles per attempt: 3, 6, 12 s, capped at 24 s | A slow participant gets 21 s before the step counts as unknown, and resends do not flood it |
+| Database access | jOOQ, classes generated from a Flyway-migrated Postgres | SQL checked at compile time, and `SKIP LOCKED`, advisory locks, `ON CONFLICT` and `UPDATE ... FROM` stay first class. Plan and trade-offs in [jooq-migration-plan.md](docs/jooq-migration-plan.md) |
 
 ## Orchestrator restart check
 
@@ -143,14 +144,14 @@ make test
 | Level | What |
 |---|---|
 | Unit and jqwik properties | Every transition of the state machine. For any failing step, compensations run in strict reverse order and only for applied or unknown steps |
-| ArchUnit | The saga domain imports no Spring, Jackson or JDBC |
+| ArchUnit | The saga domain imports no Spring, Jackson, JDBC or jOOQ. Only `transfer.persistence` uses jOOQ |
 | Testcontainers | Participant runtime (replay, tombstone, both faults), outbox relay, full orchestrator flow with scripted participants on real Kafka, account and risk rules |
 | Vitest | Progress derivation, out of order SSE updates, page rendering |
 | `make e2e` | The catalog against the running stack |
 
 ## Stack
 
-Java 25, Spring Boot 4.1.2, Spring Kafka, `JdbcClient`, Flyway, PostgreSQL 18, Kafka 4.4 (KRaft). React 19, TypeScript 7, Vite 8, Tailwind CSS 4, shadcn/ui.
+Java 25, Spring Boot 4.1.2, Spring Kafka, jOOQ, Flyway, PostgreSQL 18, Kafka 4.4 (KRaft). React 19, TypeScript 7, Vite 8, Tailwind CSS 4, shadcn/ui.
 
 ```
 messaging/          contracts, outbox, relay, participant runtime

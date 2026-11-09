@@ -1,6 +1,6 @@
 # Plan: move persistence from JdbcClient to jOOQ
 
-> **Status:** Draft, revised after design review (code generation source, ArchUnit scope, `AccountStatus` visibility).
+> **Status:** Implemented on branch `jooq-migration`, one commit per phase.
 > **Author:** Jader Santos.
 > **Companion files:** [`SDD.md`](SDD.md) (§6.3 layout, §6.6 messaging, §6.7 data model, §9 testing).
 > **Source of truth:** the store classes listed in [§3](#3-scope), Boot BOM `spring-boot-dependencies` 4.1.2.
@@ -82,7 +82,7 @@ Generation runs against a real Postgres, never from parsed DDL:
 2. It runs Flyway with that module's locations, in the same order the service uses.
 3. It calls `org.jooq.codegen.GenerationTool` against that database and writes to `src/generated/java`.
 
-`make jooq` runs it for all four modules through `exec:java` with `classpathScope=test`. The generated sources are committed, so `compile` and the IDE need no Docker. Only `make jooq` and `verify` do, and `verify` already needs Docker for the ITs.
+`make jooq` runs it for all four modules as an explicitly selected test, `-Dtest=JooqCodegen`, so no extra Maven plugin is needed. The class name has no `Test` suffix, so a normal build never runs it. The generated sources are committed, so `compile` and the IDE need no Docker. Only `make jooq` and `verify` do, and `verify` already needs Docker for the ITs.
 
 `make jooq-check` runs `make jooq` and then `git diff --exit-code -- '*/src/generated'`. A migration added without regenerating fails that check.
 
@@ -134,12 +134,13 @@ The JVM flags `-Dorg.jooq.no-logo=true -Dorg.jooq.no-tips=true` go into the Dock
 | `extract(epoch FROM now() - min(created_at))` | plain SQL template with a constant, same as today |
 | 3 queries per `TransferView` | one query with `multiset(...)` for steps and events, mapped to `StepView` and `EventView` |
 
-`RiskStore.onReservation(sagaId, String assignments)` goes away. `clear`, `unclear` and `release` each build their own `update(...)` and call a helper that checks the row count. That removes the `S2077` finding.
+`RiskStore.onReservation` takes a `Map<Field<BigDecimal>, Field<BigDecimal>>` of typed assignments instead of a SQL string. `clear`, `unclear` and `release` each pass their own map. That removes the `S2077` finding.
 
 ### 5.5 Guard rails
 
 * **ArchUnit.** Only `transfer-service` has an `ArchitectureTest`, so the rules live there. `domain_is_plain_java` adds `org.jooq..` to its forbidden packages. A new rule allows `org.jooq..` only in `..transfer.persistence..`, which also holds the generated package. `messaging`, `account-service` and `risk-service` keep their stores in one package each and get no new ArchUnit test.
-* **Gauges.** `SagaMetrics` sits in `transfer.app`, so it cannot use jOOQ under that rule. Its three queries move into `SagaStore` as `countActive(SagaStatus)` and `oldestCompensatingAge()`. `SagaMetrics` stays a plain `MeterBinder` that calls them.
+* **Gauges.** `SagaMetrics` sits in `transfer.app`, so it cannot use jOOQ under that rule. Its queries move into `SagaStore` as `count(SagaStatus)` and `secondsSinceOldestIn(SagaStatus)`. `SagaMetrics` stays a plain `MeterBinder` that calls them.
+* **Partial index.** `saga_due` has the predicate `status IN ('RUNNING', 'COMPENSATING')`. jOOQ binds values by default, and a generic Postgres plan cannot match a bind parameter to a partial index predicate. `SagaStore` keeps those two statuses as inline literals in `dueIds` and `lockIfDue`.
 * **Logging.** jOOQ's `LoggerListener` logs every statement with inlined bind values at `DEBUG`. Those values include account ids and amounts. `org.jooq` stays at `INFO` in every `application.yaml`, with an explicit `logging.level.org.jooq.tools.LoggerListener: INFO` so a later package-wide `DEBUG` does not turn it on by accident.
 * **Sonar.** The Maven scanner reads compile source roots, and `src/generated/java` becomes one. `sonar.exclusions` and `sonar.coverage.exclusions` get `**/src/generated/**`. JaCoCo excludes the generated packages from the report.
 * **Spotless.** The include pattern `src/*/java/**/*.java` matches `src/generated/java`. An `<excludes>` entry for `src/generated/**` keeps the formatter off generated code.
