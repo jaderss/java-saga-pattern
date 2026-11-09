@@ -20,6 +20,7 @@ class ArchitectureTest {
                     "org.springframework..",
                     "tools.jackson..",
                     "java.sql..",
+                    "org.jooq..",
                     "..transfer.app..",
                     "..transfer.persistence..",
                     "..transfer.api..");
@@ -39,4 +40,12 @@ class ArchitectureTest {
             .should()
             .dependOnClassesThat()
             .resideInAPackage("..transfer.api..");
+
+    @ArchTest
+    static final ArchRule only_persistence_speaks_jooq = noClasses()
+            .that()
+            .resideOutsideOfPackage("..transfer.persistence..")
+            .should()
+            .dependOnClassesThat()
+            .resideInAPackage("org.jooq..");
 }

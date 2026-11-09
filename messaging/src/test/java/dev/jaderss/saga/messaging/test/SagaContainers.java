@@ -9,10 +9,12 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 @TestConfiguration(proxyBeanMethods = false)
 public class SagaContainers {
 
+    public static final String POSTGRES_IMAGE = "postgres:18.6";
+
     @Bean
     @ServiceConnection
     PostgreSQLContainer postgres() {
-        return new PostgreSQLContainer("postgres:18.6");
+        return new PostgreSQLContainer(POSTGRES_IMAGE);
     }
 
     @Bean

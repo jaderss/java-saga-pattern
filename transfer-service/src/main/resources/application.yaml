@@ -11,6 +11,8 @@ spring:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/transfer
     username: transfer
     password: ${DB_PASSWORD:transfer}
+  jooq:
+    sql-dialect: postgres
   flyway:
     locations: classpath:db/messaging,classpath:db/migration
   kafka:
@@ -45,3 +47,6 @@ management:
 logging:
   pattern:
     level: "%5p [%X{sagaId:-}]"
+  level:
+    org.jooq: INFO
+    org.jooq.tools.LoggerListener: INFO

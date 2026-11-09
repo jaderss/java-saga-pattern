@@ -1,6 +1,6 @@
 package dev.jaderss.saga.account;
 
-enum AccountStatus {
+public enum AccountStatus {
     ACTIVE,
     FROZEN
 }

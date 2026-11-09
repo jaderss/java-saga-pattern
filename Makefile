@@ -2,12 +2,14 @@ export JAVA_HOME ?= $(HOME)/Library/Java/JavaVirtualMachines/temurin-25.0.4/Cont
 
 COMPOSE := docker compose
 
-.PHONY: help up down clean e2e test test-java test-web diagrams logs
+.PHONY: help up down clean e2e test test-java test-web jooq jooq-check diagrams logs
 
 help:
 	@echo "make up        postgres, kafka, three services and the web page on http://localhost:8080"
 	@echo "make e2e       run every scenario against the running stack, check outcomes and money"
 	@echo "make test      Maven verify (Docker needed for Testcontainers) and web tests"
+	@echo "make jooq      regenerate the jOOQ classes from a migrated Postgres (Docker needed)"
+	@echo "make jooq-check  regenerate and fail if the committed jOOQ classes changed"
 	@echo "make diagrams  export docs/diagrams/*.mmd to PNG"
 	@echo "make logs      follow the three services"
 	@echo "make down      stop everything"
@@ -26,6 +28,13 @@ test-java:
 
 test-web:
 	cd web && npm ci && npm run lint && npm test && npm run build
+
+jooq:
+	./mvnw -q -B package -Dtest=JooqCodegen -Dsurefire.failIfNoSpecifiedTests=false -DskipITs -Djacoco.skip=true -Dspotless.check.skip=true
+
+jooq-check: jooq
+	git diff --exit-code -- '*/src/generated'
+	test -z "$$(git ls-files --others --exclude-standard -- '*/src/generated')"
 
 diagrams:
 	for f in docs/diagrams/*.mmd; do npx -y @mermaid-js/mermaid-cli@12.2.0 -i $$f -o $${f%.mmd}.png -b white -s 2 -c docs/diagrams/mermaid.json; done

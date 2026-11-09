@@ -27,6 +27,8 @@
         <sonar.organization>jaderss</sonar.organization>
         <sonar.projectKey>jaderss_java-saga-pattern</sonar.projectKey>
         <sonar.host.url>https://sonarcloud.io</sonar.host.url>
+        <sonar.exclusions>**/src/generated/**</sonar.exclusions>
+        <sonar.coverage.exclusions>**/src/generated/**</sonar.coverage.exclusions>
         <archunit.version>1.5.1</archunit.version>
         <jqwik.version>1.10.2</jqwik.version>
         <jacoco.version>0.8.16</jacoco.version>
@@ -66,6 +68,11 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>org.jooq</groupId>
+            <artifactId>jooq-codegen</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
@@ -79,6 +86,9 @@
                         <includes>
                             <include>src/*/java/**/*.java</include>
                         </includes>
+                        <excludes>
+                            <exclude>src/generated/**</exclude>
+                        </excludes>
                         <palantirJavaFormat>
                             <version>${palantir-java-format.version}</version>
                         </palantirJavaFormat>
@@ -94,13 +104,52 @@
                 </executions>
             </plugin>
             <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>build-helper-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>add-generated-sources</id>
+                        <phase>generate-sources</phase>
+                        <goals>
+                            <goal>add-source</goal>
+                        </goals>
+                        <configuration>
+                            <sources>
+                                <source>src/generated/java</source>
+                            </sources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <systemPropertyVariables>
+                        <org.jooq.no-logo>true</org.jooq.no-logo>
+                        <org.jooq.no-tips>true</org.jooq.no-tips>
+                    </systemPropertyVariables>
+                </configuration>
+            </plugin>
+            <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-failsafe-plugin</artifactId>
+                <configuration>
+                    <systemPropertyVariables>
+                        <org.jooq.no-logo>true</org.jooq.no-logo>
+                        <org.jooq.no-tips>true</org.jooq.no-tips>
+                    </systemPropertyVariables>
+                </configuration>
             </plugin>
             <plugin>
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
                 <version>${jacoco.version}</version>
+                <configuration>
+                    <excludes>
+                        <exclude>dev/jaderss/saga/**/db/**</exclude>
+                    </excludes>
+                </configuration>
                 <executions>
                     <execution>
                         <goals>
