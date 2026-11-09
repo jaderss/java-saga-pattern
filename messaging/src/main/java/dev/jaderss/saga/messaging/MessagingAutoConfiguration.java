@@ -12,12 +12,13 @@ import java.util.stream.Stream;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.TopicPartition;
+import org.jooq.DSLContext;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.jooq.autoconfigure.JooqAutoConfiguration;
 import org.springframework.boot.kafka.autoconfigure.DefaultKafkaProducerFactoryCustomizer;
 import org.springframework.context.annotation.Bean;
-import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.kafka.config.TopicBuilder;
 import org.springframework.kafka.core.KafkaAdmin;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -31,7 +32,7 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.databind.json.JsonMapper;
 
 @EnableScheduling
-@AutoConfiguration
+@AutoConfiguration(after = JooqAutoConfiguration.class)
 public class MessagingAutoConfiguration {
 
     static final int PARTITIONS = 3;
@@ -60,13 +61,13 @@ public class MessagingAutoConfiguration {
     }
 
     @Bean
-    OutboxWriter outboxWriter(JdbcClient jdbc, JsonMapper json) {
-        return new OutboxWriter(jdbc, json);
+    OutboxWriter outboxWriter(DSLContext db, JsonMapper json) {
+        return new OutboxWriter(db, json);
     }
 
     @Bean
-    OutboxRelay outboxRelay(JdbcClient jdbc, KafkaTemplate<String, String> kafka, TransactionTemplate tx) {
-        return new OutboxRelay(jdbc, kafka, tx);
+    OutboxRelay outboxRelay(DSLContext db, KafkaTemplate<String, String> kafka, TransactionTemplate tx) {
+        return new OutboxRelay(db, kafka, tx);
     }
 
     @Bean
@@ -87,8 +88,8 @@ public class MessagingAutoConfiguration {
     }
 
     @Bean
-    OutboxMetrics outboxMetrics(JdbcClient jdbc) {
-        return new OutboxMetrics(jdbc);
+    OutboxMetrics outboxMetrics(DSLContext db) {
+        return new OutboxMetrics(db);
     }
 
     @Bean

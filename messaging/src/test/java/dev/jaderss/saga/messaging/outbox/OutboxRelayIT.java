@@ -6,6 +6,7 @@ import static org.awaitility.Awaitility.await;
 import dev.jaderss.saga.messaging.contract.Topics;
 import dev.jaderss.saga.messaging.test.MessagingTestApp;
 import dev.jaderss.saga.messaging.test.SagaContainers;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -19,6 +20,7 @@ import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
+import org.jooq.DSLContext;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -44,6 +46,9 @@ class OutboxRelayIT {
     JdbcClient jdbc;
 
     @Autowired
+    DSLContext db;
+
+    @Autowired
     KafkaContainer kafka;
 
     @Autowired
@@ -52,8 +57,28 @@ class OutboxRelayIT {
     @Autowired
     OutboxRelay relay;
 
+    @Autowired
+    OutboxMetrics metrics;
+
     private static final int KEYS = 50;
     private static final int MESSAGES_PER_KEY = 40;
+
+    @Test
+    void reports_the_depth_and_the_age_of_the_oldest_waiting_message() {
+        var registry = new SimpleMeterRegistry();
+        metrics.bindTo(registry);
+
+        tx.executeWithoutResult(status -> {
+            jdbc.sql("""
+                            INSERT INTO outbox (topic, msg_key, payload, created_at)
+                            VALUES ('gauge-test', 'key', '{}', now() - interval '1 minute')
+                            """).update();
+
+            assertThat(registry.get("outbox.depth").gauge().value()).isPositive();
+            assertThat(registry.get("outbox.oldest.age").gauge().value()).isGreaterThanOrEqualTo(60);
+            status.setRollbackOnly();
+        });
+    }
 
     @Test
     void publishes_committed_rows_with_the_saga_id_as_key_and_deletes_them() {
@@ -77,7 +102,7 @@ class OutboxRelayIT {
     @Test
     void relays_draining_at_the_same_time_keep_the_order_of_each_key() throws Exception {
         var topic = "relay-order-" + UUID.randomUUID();
-        var relays = List.of(new OutboxRelay(jdbc, template, tx), new OutboxRelay(jdbc, template, tx), relay);
+        var relays = List.of(new OutboxRelay(db, template, tx), new OutboxRelay(db, template, tx), relay);
         var stop = new AtomicBoolean();
         try (var pods = Executors.newVirtualThreadPerTaskExecutor()) {
             relays.forEach(each -> pods.submit(() -> {

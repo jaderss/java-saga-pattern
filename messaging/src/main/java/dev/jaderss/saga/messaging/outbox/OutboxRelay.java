@@ -1,13 +1,19 @@
 package dev.jaderss.saga.messaging.outbox;
 
+import static dev.jaderss.saga.messaging.db.Tables.OUTBOX;
+import static org.jooq.Records.mapping;
+import static org.jooq.impl.DSL.field;
+import static org.jooq.impl.DSL.inline;
+
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import org.jooq.DSLContext;
+import org.jooq.Field;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -15,16 +21,17 @@ import org.springframework.transaction.support.TransactionTemplate;
 public class OutboxRelay {
 
     static final int BATCH = 100;
-    private static final String TAKE_LEAD = "SELECT pg_try_advisory_xact_lock(hashtext('outbox-relay'))";
+    private static final Field<Boolean> TAKE_LEAD =
+            field("pg_try_advisory_xact_lock(hashtext({0}))", Boolean.class, inline("outbox-relay"));
     private static final Duration ACK_TIMEOUT = Duration.ofSeconds(10);
     private static final Logger log = LoggerFactory.getLogger(OutboxRelay.class);
 
-    private final JdbcClient jdbc;
+    private final DSLContext db;
     private final KafkaTemplate<String, String> kafka;
     private final TransactionTemplate tx;
 
-    public OutboxRelay(JdbcClient jdbc, KafkaTemplate<String, String> kafka, TransactionTemplate tx) {
-        this.jdbc = jdbc;
+    public OutboxRelay(DSLContext db, KafkaTemplate<String, String> kafka, TransactionTemplate tx) {
+        this.db = db;
         this.kafka = kafka;
         this.tx = tx;
     }
@@ -42,23 +49,25 @@ public class OutboxRelay {
 
     int publishBatch() {
         return tx.execute(_ -> {
-            if (!jdbc.sql(TAKE_LEAD).query(Boolean.class).single()) {
+            if (!db.select(TAKE_LEAD).fetchSingle(TAKE_LEAD)) {
                 return 0;
             }
-            var rows = jdbc.sql(
-                            "SELECT id, topic, msg_key, payload FROM outbox ORDER BY id LIMIT ? FOR UPDATE SKIP LOCKED")
-                    .param(BATCH)
-                    .query(Row.class)
-                    .list();
+            var rows = db.select(OUTBOX.ID, OUTBOX.TOPIC, OUTBOX.MSG_KEY, OUTBOX.PAYLOAD)
+                    .from(OUTBOX)
+                    .orderBy(OUTBOX.ID)
+                    .limit(BATCH)
+                    .forUpdate()
+                    .skipLocked()
+                    .fetch(mapping(Row::new));
             if (rows.isEmpty()) {
                 return 0;
             }
             await(CompletableFuture.allOf(rows.stream()
                     .map(row -> kafka.send(row.topic(), row.msgKey(), row.payload()))
                     .toArray(CompletableFuture[]::new)));
-            jdbc.sql("DELETE FROM outbox WHERE id IN (:ids)")
-                    .param("ids", rows.stream().map(Row::id).toList())
-                    .update();
+            db.deleteFrom(OUTBOX)
+                    .where(OUTBOX.ID.in(rows.stream().map(Row::id).toList()))
+                    .execute();
             return rows.size();
         });
     }

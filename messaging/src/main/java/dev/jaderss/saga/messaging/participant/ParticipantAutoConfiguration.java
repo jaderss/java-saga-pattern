@@ -4,11 +4,11 @@ import dev.jaderss.saga.messaging.MessagingAutoConfiguration;
 import dev.jaderss.saga.messaging.outbox.OutboxWriter;
 import java.time.Clock;
 import java.time.Duration;
+import org.jooq.DSLContext;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.context.annotation.Bean;
-import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -19,12 +19,12 @@ public class ParticipantAutoConfiguration {
     @Bean
     ParticipantRuntime participantRuntime(
             StepHandler handler,
-            JdbcClient jdbc,
+            DSLContext db,
             Clock clock,
             OutboxWriter outbox,
             TransactionTemplate tx,
             @Value("${participant.step-latency:0ms}") Duration stepLatency) {
-        return new ParticipantRuntime(handler, new StepRecords(jdbc, clock), outbox, tx, stepLatency);
+        return new ParticipantRuntime(handler, new StepRecords(db, clock), outbox, tx, stepLatency);
     }
 
     @Bean

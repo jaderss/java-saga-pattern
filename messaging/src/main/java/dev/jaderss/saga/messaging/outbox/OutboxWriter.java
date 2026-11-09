@@ -1,25 +1,27 @@
 package dev.jaderss.saga.messaging.outbox;
 
+import static dev.jaderss.saga.messaging.db.Tables.OUTBOX;
+
 import java.util.UUID;
-import org.springframework.jdbc.core.simple.JdbcClient;
+import org.jooq.DSLContext;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.json.JsonMapper;
 
 public class OutboxWriter {
 
-    private final JdbcClient jdbc;
+    private final DSLContext db;
     private final JsonMapper json;
 
-    public OutboxWriter(JdbcClient jdbc, JsonMapper json) {
-        this.jdbc = jdbc;
+    public OutboxWriter(DSLContext db, JsonMapper json) {
+        this.db = db;
         this.json = json;
     }
 
     @Transactional(propagation = Propagation.MANDATORY)
     public void append(String topic, UUID key, Object message) {
-        jdbc.sql("INSERT INTO outbox (topic, msg_key, payload) VALUES (?, ?, ?)")
-                .params(topic, key.toString(), json.writeValueAsString(message))
-                .update();
+        db.insertInto(OUTBOX, OUTBOX.TOPIC, OUTBOX.MSG_KEY, OUTBOX.PAYLOAD)
+                .values(topic, key.toString(), json.writeValueAsString(message))
+                .execute();
     }
 }
