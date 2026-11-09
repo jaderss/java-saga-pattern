@@ -18,6 +18,7 @@ import java.time.Clock;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
+import org.assertj.core.api.recursive.comparison.RecursiveComparisonConfiguration;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -31,6 +32,7 @@ class RiskStepsIT {
     private static final String ALICE = "ACC-1001";
     private static final String BOB = "ACC-2002";
     private static final String MALLORY = "ACC-5005";
+    private static final BigDecimal LIMIT = new BigDecimal("1000.00");
 
     @Autowired
     RiskSteps steps;
@@ -83,8 +85,24 @@ class RiskStepsIT {
                 .isEqualTo(StepResult.rejected("destination ACC-5005 is on the watchlist: sanctions list match"));
     }
 
+    @Test
+    void lists_todays_usage_and_watchlisted_accounts_without_usage() {
+        steps.execute(command(RESERVE_LIMIT, EXECUTE, BOB, "250.00"));
+
+        assertThat(risk.usage(LocalDate.now(clock), LIMIT))
+                .usingRecursiveFieldByFieldElementComparator(RecursiveComparisonConfiguration.builder()
+                        .withComparatorForType(BigDecimal::compareTo, BigDecimal.class)
+                        .build())
+                .containsExactly(
+                        limitUsage(ALICE, "250.00", null), limitUsage(MALLORY, "0.00", "sanctions list match"));
+    }
+
+    private LimitUsage limitUsage(String accountId, String reserved, String watchlistReason) {
+        return new LimitUsage(accountId, LocalDate.now(clock), LIMIT, amount(reserved), zero(), watchlistReason);
+    }
+
     private LimitUsage usage() {
-        return risk.usage(LocalDate.now(clock), new BigDecimal("1000.00")).stream()
+        return risk.usage(LocalDate.now(clock), LIMIT).stream()
                 .filter(usage -> usage.accountId().equals(ALICE))
                 .findFirst()
                 .orElseThrow();
