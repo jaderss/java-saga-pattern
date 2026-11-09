@@ -1,0 +1,24 @@
+sequenceDiagram
+    autonumber
+    actor U as Browser
+    participant T as transfer-service
+    participant TDB as transfer db
+    participant K as Kafka
+    participant R as risk-service
+    participant A as account-service
+
+    U->>T: POST /api/transfers (Idempotency-Key)
+    T->>TDB: insert saga RUNNING, outbox EXECUTE RESERVE_LIMIT (one transaction)
+    T-->>U: 202 view
+    U->>T: GET /api/transfers/{id}/stream (SSE)
+    T->>K: relay publishes saga.risk.commands
+    K->>R: EXECUTE RESERVE_LIMIT
+    R->>R: reserve limit, step_record APPLIED, outbox reply (one transaction)
+    R->>K: relay publishes DONE on saga.transfer.replies
+    K->>T: DONE RESERVE_LIMIT
+    T->>TDB: step SUCCEEDED, outbox EXECUTE DEBIT_SOURCE
+    T-->>U: SSE view
+    Note over T,A: DEBIT_SOURCE and CREDIT_DESTINATION on account-service,<br/>CLEAR_TRANSFER on risk-service, same pattern
+    K->>T: DONE CLEAR_TRANSFER
+    T->>TDB: saga COMPLETED, deadline cleared
+    T-->>U: SSE view COMPLETED, stream closes

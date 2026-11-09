@@ -1,0 +1,124 @@
+name: java-saga-pattern
+
+x-service: &service
+  build:
+    context: .
+  restart: unless-stopped
+  depends_on:
+    db-init:
+      condition: service_completed_successfully
+    kafka:
+      condition: service_healthy
+  healthcheck:
+    test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8080 && printf 'GET /actuator/health HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q UP <&3"]
+    interval: 3s
+    timeout: 3s
+    retries: 40
+
+x-env: &env
+  PORT: "8080"
+  DB_HOST: postgres
+  KAFKA_BOOTSTRAP: kafka:29092
+  JAVA_OPTS: -XX:MaxRAMPercentage=75
+
+services:
+  postgres:
+    image: postgres:${POSTGRES_VERSION:-18.6}
+    command: ["postgres", "-c", "tcp_keepalives_idle=30", "-c", "tcp_keepalives_interval=10", "-c", "tcp_keepalives_count=3"]
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports: ["127.0.0.1:5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  db-init:
+    image: flyway/flyway:${FLYWAY_VERSION:-12.4.0}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["migrate"]
+    environment:
+      FLYWAY_URL: jdbc:postgresql://postgres:5432/postgres
+      FLYWAY_USER: postgres
+      FLYWAY_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      FLYWAY_LOCATIONS: filesystem:/flyway/migrations
+      FLYWAY_PLACEHOLDERS_TRANSFERPASSWORD: ${TRANSFER_DB_PASSWORD:-transfer}
+      FLYWAY_PLACEHOLDERS_ACCOUNTPASSWORD: ${ACCOUNT_DB_PASSWORD:-account}
+      FLYWAY_PLACEHOLDERS_RISKPASSWORD: ${RISK_DB_PASSWORD:-risk}
+    volumes:
+      - ./infra/postgres/migrations:/flyway/migrations:ro
+    restart: "no"
+
+  kafka:
+    image: apache/kafka:${KAFKA_VERSION:-4.4.0}
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENERS: INTERNAL://:29092,CONTROLLER://:9093,HOST://:9094
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,HOST://localhost:9094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    ports: ["127.0.0.1:9094:9094"]
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:29092 > /dev/null 2>&1"]
+      interval: 3s
+      timeout: 10s
+      retries: 40
+
+  transfer-service:
+    <<: *service
+    build:
+      context: .
+      args:
+        MODULE: transfer-service
+    environment:
+      <<: *env
+      DB_PASSWORD: ${TRANSFER_DB_PASSWORD:-transfer}
+      SAGA_STEP_TIMEOUT: ${SAGA_STEP_TIMEOUT:-3s}
+    ports: ["127.0.0.1:8081:8080"]
+
+  account-service:
+    <<: *service
+    build:
+      context: .
+      args:
+        MODULE: account-service
+    environment:
+      <<: *env
+      DB_PASSWORD: ${ACCOUNT_DB_PASSWORD:-account}
+      STEP_LATENCY: ${STEP_LATENCY:-700ms}
+    ports: ["127.0.0.1:8082:8080"]
+
+  risk-service:
+    <<: *service
+    build:
+      context: .
+      args:
+        MODULE: risk-service
+    environment:
+      <<: *env
+      DB_PASSWORD: ${RISK_DB_PASSWORD:-risk}
+      STEP_LATENCY: ${STEP_LATENCY:-700ms}
+    ports: ["127.0.0.1:8083:8080"]
+
+  web:
+    build:
+      context: web
+    depends_on:
+      transfer-service:
+        condition: service_healthy
+      account-service:
+        condition: service_healthy
+      risk-service:
+        condition: service_healthy
+    ports: ["127.0.0.1:8080:80"]

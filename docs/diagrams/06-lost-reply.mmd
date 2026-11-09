@@ -1,0 +1,14 @@
+sequenceDiagram
+    autonumber
+    participant T as transfer-service
+    participant A as account-service
+    participant S as step_record
+
+    T->>A: EXECUTE DEBIT_SOURCE, attempt 1
+    A->>S: no row, debit Alice, insert APPLIED
+    A--xT: reply lost (fault LOSE_REPLY)
+    Note over T,A: deadline passes (3 s), timeout scan
+    T->>A: EXECUTE DEBIT_SOURCE, attempt 2
+    A->>S: row APPLIED found, no second debit
+    A-->>T: DONE, duplicate = true
+    T->>T: step SUCCEEDED, send CREDIT_DESTINATION

@@ -1,0 +1,77 @@
+erDiagram
+    SAGA ||--|{ SAGA_STEP : "has 4"
+    SAGA ||--o{ SAGA_EVENT : "timeline"
+    SAGA {
+        uuid id PK
+        text idempotency_key UK
+        text source_account_id
+        text destination_account_id
+        numeric amount
+        char currency
+        jsonb faults
+        text status
+        text current_step
+        text current_action
+        int attempt
+        timestamptz deadline
+        text reason
+    }
+    SAGA_STEP {
+        uuid saga_id PK
+        int position PK
+        text step
+        text status
+    }
+    SAGA_EVENT {
+        bigint id PK
+        uuid saga_id FK
+        text type
+        text step
+        text action
+        int attempt
+        text detail
+    }
+    ACCOUNT ||--o{ ACCOUNT_ENTRY : "entries"
+    ACCOUNT {
+        text id PK
+        text owner_name
+        char currency
+        numeric balance
+        text status
+    }
+    ACCOUNT_ENTRY {
+        bigint id PK
+        text account_id FK
+        uuid saga_id
+        text kind
+        numeric amount
+    }
+    LIMIT_USAGE ||--o{ RESERVATION : "per day"
+    LIMIT_USAGE {
+        text account_id PK
+        date day PK
+        numeric reserved
+        numeric used
+    }
+    RESERVATION {
+        uuid saga_id PK
+        text account_id
+        date day
+        numeric amount
+    }
+    WATCHLIST {
+        text account_id PK
+        text reason
+    }
+    STEP_RECORD {
+        uuid saga_id PK
+        text step PK
+        text status
+        text reason
+    }
+    OUTBOX {
+        bigint id PK
+        text topic
+        text msg_key
+        text payload
+    }

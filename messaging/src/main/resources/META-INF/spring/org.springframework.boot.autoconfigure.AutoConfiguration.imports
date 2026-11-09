@@ -1,0 +1,2 @@
+dev.jaderss.saga.messaging.MessagingAutoConfiguration
+dev.jaderss.saga.messaging.participant.ParticipantAutoConfiguration

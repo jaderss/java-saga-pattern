@@ -1,0 +1,23 @@
+sequenceDiagram
+    autonumber
+    participant T as transfer-service
+    participant R as risk-service
+    participant A as account-service
+
+    Note over T,A: Alice to Mallory, 75.00 USD. Mallory is on the watchlist.
+    T->>R: EXECUTE RESERVE_LIMIT
+    R-->>T: DONE
+    T->>A: EXECUTE DEBIT_SOURCE
+    A-->>T: DONE (Alice -75.00)
+    T->>A: EXECUTE CREDIT_DESTINATION
+    A-->>T: DONE (Mallory +75.00)
+    T->>R: EXECUTE CLEAR_TRANSFER
+    R-->>T: REJECTED, destination on the watchlist
+    Note over T,R: status COMPENSATING, undo in reverse order
+    T->>A: COMPENSATE CREDIT_DESTINATION
+    A-->>T: DONE (Mallory -75.00)
+    T->>A: COMPENSATE DEBIT_SOURCE
+    A-->>T: DONE (Alice +75.00)
+    T->>R: COMPENSATE RESERVE_LIMIT
+    R-->>T: DONE (reservation released)
+    Note over T,R: status COMPENSATED, both balances unchanged

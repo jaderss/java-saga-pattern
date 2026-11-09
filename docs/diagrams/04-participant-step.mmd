@@ -1,0 +1,10 @@
+stateDiagram-v2
+    direction LR
+    [*] --> APPLIED: EXECUTE, handler applies
+    [*] --> REJECTED: EXECUTE, handler rejects
+    [*] --> ABORTED: COMPENSATE before EXECUTE (tombstone)
+    APPLIED --> COMPENSATED: COMPENSATE, handler undoes
+    APPLIED --> APPLIED: EXECUTE again, replay DONE
+    REJECTED --> REJECTED: EXECUTE again, replay REJECTED
+    ABORTED --> ABORTED: late EXECUTE, reply REJECTED, no effect
+    COMPENSATED --> COMPENSATED: COMPENSATE again, replay DONE

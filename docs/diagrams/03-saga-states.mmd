@@ -1,0 +1,14 @@
+stateDiagram-v2
+    direction LR
+    [*] --> RUNNING: start, send EXECUTE step 1
+    RUNNING --> RUNNING: DONE, send next step
+    RUNNING --> RUNNING: timeout with attempts left, resend
+    RUNNING --> COMPLETED: DONE on step 4
+    RUNNING --> REJECTED: step 1 rejected, nothing applied
+    RUNNING --> COMPENSATING: later step rejected, or retries exhausted
+    COMPENSATING --> COMPENSATING: DONE, undo next lower applied step
+    COMPENSATING --> COMPENSATING: timeout, resend without limit
+    COMPENSATING --> COMPENSATED: last applied step undone
+    COMPLETED --> [*]
+    COMPENSATED --> [*]
+    REJECTED --> [*]
