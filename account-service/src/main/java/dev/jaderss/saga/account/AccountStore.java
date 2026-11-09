@@ -1,5 +1,9 @@
 package dev.jaderss.saga.account;
 
+import static dev.jaderss.saga.account.db.Tables.ACCOUNT;
+import static dev.jaderss.saga.account.db.Tables.ACCOUNT_ENTRY;
+import static org.jooq.Records.mapping;
+
 import dev.jaderss.saga.messaging.contract.Money;
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -8,8 +12,10 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import javax.sql.DataSource;
+import org.jooq.DSLContext;
+import org.jooq.Record5;
+import org.jooq.SelectJoinStep;
 import org.springframework.core.io.ClassPathResource;
-import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,77 +26,80 @@ class AccountStore {
     private static final ResourceDatabasePopulator RESET =
             new ResourceDatabasePopulator(new ClassPathResource("db/seed/reset.sql"));
 
-    private final JdbcClient jdbc;
+    private final DSLContext db;
     private final DataSource dataSource;
     private final Clock clock;
 
-    AccountStore(JdbcClient jdbc, DataSource dataSource, Clock clock) {
-        this.jdbc = jdbc;
+    AccountStore(DSLContext db, DataSource dataSource, Clock clock) {
+        this.db = db;
         this.dataSource = dataSource;
         this.clock = clock;
     }
 
     List<Account> all() {
-        return jdbc.sql("SELECT id, owner_name, currency, balance, status FROM account ORDER BY id")
-                .query(Account.class)
-                .list();
+        return selectAccounts().orderBy(ACCOUNT.ID).fetch(mapping(Account::new));
     }
 
     Optional<Account> find(String id) {
-        return jdbc.sql("SELECT id, owner_name, currency, balance, status FROM account WHERE id = ?")
-                .param(id)
-                .query(Account.class)
-                .optional();
+        return selectAccounts().where(ACCOUNT.ID.eq(id)).fetchOptional(mapping(Account::new));
     }
 
     boolean debit(String id, Money money) {
-        return jdbc.sql("""
-                        UPDATE account SET balance = balance - :amount
-                        WHERE id = :id AND status = 'ACTIVE' AND currency = :currency AND balance >= :amount
-                        """)
-                        .param("id", id)
-                        .param("amount", money.amount())
-                        .param("currency", money.currency().getCurrencyCode())
-                        .update()
+        return db.update(ACCOUNT)
+                        .set(ACCOUNT.BALANCE, ACCOUNT.BALANCE.minus(money.amount()))
+                        .where(
+                                ACCOUNT.ID.eq(id),
+                                ACCOUNT.STATUS.eq(AccountStatus.ACTIVE),
+                                ACCOUNT.CURRENCY.eq(money.currency().getCurrencyCode()),
+                                ACCOUNT.BALANCE.ge(money.amount()))
+                        .execute()
                 == 1;
     }
 
     boolean credit(String id, Money money) {
-        return jdbc.sql("""
-                        UPDATE account SET balance = balance + :amount
-                        WHERE id = :id AND status = 'ACTIVE' AND currency = :currency
-                        """)
-                        .param("id", id)
-                        .param("amount", money.amount())
-                        .param("currency", money.currency().getCurrencyCode())
-                        .update()
+        return db.update(ACCOUNT)
+                        .set(ACCOUNT.BALANCE, ACCOUNT.BALANCE.plus(money.amount()))
+                        .where(
+                                ACCOUNT.ID.eq(id),
+                                ACCOUNT.STATUS.eq(AccountStatus.ACTIVE),
+                                ACCOUNT.CURRENCY.eq(money.currency().getCurrencyCode()))
+                        .execute()
                 == 1;
     }
 
     void correct(String id, BigDecimal signedAmount) {
-        var updated = jdbc.sql("UPDATE account SET balance = balance + ? WHERE id = ?")
-                .params(signedAmount, id)
-                .update();
+        var updated = db.update(ACCOUNT)
+                .set(ACCOUNT.BALANCE, ACCOUNT.BALANCE.plus(signedAmount))
+                .where(ACCOUNT.ID.eq(id))
+                .execute();
         if (updated != 1) {
             throw new IllegalStateException("account " + id + " vanished before its correction");
         }
     }
 
     void entry(String accountId, UUID sagaId, EntryKind kind, BigDecimal signedAmount) {
-        jdbc.sql("""
-                        INSERT INTO account_entry (account_id, saga_id, kind, amount, created_at)
-                        VALUES (?, ?, ?, ?, ?)
-                        """)
-                .params(accountId, sagaId, kind.name(), signedAmount, OffsetDateTime.now(clock))
-                .update();
+        db.insertInto(
+                        ACCOUNT_ENTRY,
+                        ACCOUNT_ENTRY.ACCOUNT_ID,
+                        ACCOUNT_ENTRY.SAGA_ID,
+                        ACCOUNT_ENTRY.KIND,
+                        ACCOUNT_ENTRY.AMOUNT,
+                        ACCOUNT_ENTRY.CREATED_AT)
+                .values(accountId, sagaId, kind.name(), signedAmount, OffsetDateTime.now(clock))
+                .execute();
     }
 
     boolean empty() {
-        return jdbc.sql("SELECT count(*) FROM account").query(Long.class).single() == 0;
+        return !db.fetchExists(ACCOUNT);
     }
 
     @Transactional
     void reset() {
         RESET.execute(dataSource);
+    }
+
+    private SelectJoinStep<Record5<String, String, String, BigDecimal, AccountStatus>> selectAccounts() {
+        return db.select(ACCOUNT.ID, ACCOUNT.OWNER_NAME, ACCOUNT.CURRENCY, ACCOUNT.BALANCE, ACCOUNT.STATUS)
+                .from(ACCOUNT);
     }
 }
