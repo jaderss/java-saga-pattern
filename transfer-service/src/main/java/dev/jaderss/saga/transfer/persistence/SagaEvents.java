@@ -1,36 +1,47 @@
 package dev.jaderss.saga.transfer.persistence;
 
+import static dev.jaderss.saga.transfer.persistence.db.Tables.SAGA_EVENT;
+import static org.jooq.impl.DSL.row;
+
 import dev.jaderss.saga.transfer.domain.SagaEvent;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
-import org.springframework.jdbc.core.simple.JdbcClient;
+import org.jooq.DSLContext;
 import org.springframework.stereotype.Repository;
 
 @Repository
 public class SagaEvents {
 
-    private final JdbcClient jdbc;
+    private final DSLContext db;
 
-    SagaEvents(JdbcClient jdbc) {
-        this.jdbc = jdbc;
+    SagaEvents(DSLContext db) {
+        this.db = db;
     }
 
     public void append(UUID sagaId, OffsetDateTime at, List<SagaEvent> events) {
-        for (var event : events) {
-            jdbc.sql("""
-                            INSERT INTO saga_event (saga_id, occurred_at, type, step, action, attempt, detail)
-                            VALUES (?, ?, ?, ?, ?, ?, ?)
-                            """)
-                    .params(
-                            sagaId,
-                            at,
-                            event.type().name(),
-                            event.step() == null ? null : event.step().name(),
-                            event.action() == null ? null : event.action().name(),
-                            event.attempt(),
-                            event.detail())
-                    .update();
+        if (events.isEmpty()) {
+            return;
         }
+        db.insertInto(
+                        SAGA_EVENT,
+                        SAGA_EVENT.SAGA_ID,
+                        SAGA_EVENT.OCCURRED_AT,
+                        SAGA_EVENT.TYPE,
+                        SAGA_EVENT.STEP,
+                        SAGA_EVENT.ACTION,
+                        SAGA_EVENT.ATTEMPT,
+                        SAGA_EVENT.DETAIL)
+                .valuesOfRows(events.stream()
+                        .map(event -> row(
+                                sagaId,
+                                at,
+                                event.type(),
+                                event.step(),
+                                event.action(),
+                                event.attempt(),
+                                event.detail()))
+                        .toList())
+                .execute();
     }
 }

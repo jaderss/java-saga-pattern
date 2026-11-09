@@ -1,58 +1,72 @@
 package dev.jaderss.saga.transfer.persistence;
 
+import static dev.jaderss.saga.transfer.persistence.db.Tables.SAGA;
+import static dev.jaderss.saga.transfer.persistence.db.Tables.SAGA_EVENT;
+import static dev.jaderss.saga.transfer.persistence.db.Tables.SAGA_STEP;
+import static org.jooq.Records.mapping;
+import static org.jooq.impl.DSL.multiset;
+import static org.jooq.impl.DSL.select;
+
 import dev.jaderss.saga.messaging.contract.Action;
-import dev.jaderss.saga.messaging.contract.Money;
 import dev.jaderss.saga.messaging.contract.Step;
 import dev.jaderss.saga.messaging.contract.TransferTerms;
 import dev.jaderss.saga.transfer.domain.SagaEventType;
 import dev.jaderss.saga.transfer.domain.SagaStatus;
 import dev.jaderss.saga.transfer.domain.StepStatus;
-import java.sql.ResultSet;
-import java.sql.SQLException;
+import dev.jaderss.saga.transfer.persistence.db.tables.records.SagaRecord;
 import java.time.OffsetDateTime;
-import java.util.Currency;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
-import org.springframework.jdbc.core.simple.JdbcClient;
+import org.jooq.DSLContext;
+import org.jooq.Field;
 import org.springframework.stereotype.Repository;
 
 @Repository
 public class TransferViews {
 
-    private static final String SUMMARY =
-            "SELECT id, status, source_account_id, destination_account_id, amount, currency, reason, created_at FROM saga";
+    private static final Field<List<StepView>> STEPS = multiset(select(SAGA_STEP.STEP, SAGA_STEP.STATUS)
+                    .from(SAGA_STEP)
+                    .where(SAGA_STEP.SAGA_ID.eq(SAGA.ID))
+                    .orderBy(SAGA_STEP.POSITION))
+            .convertFrom(rows -> rows.map(mapping((step, status) -> new StepView(step, serviceOf(step), status))));
 
-    private final JdbcClient jdbc;
+    private static final Field<List<EventView>> EVENTS = multiset(select(
+                            SAGA_EVENT.ID,
+                            SAGA_EVENT.OCCURRED_AT,
+                            SAGA_EVENT.TYPE,
+                            SAGA_EVENT.STEP,
+                            SAGA_EVENT.ACTION,
+                            SAGA_EVENT.ATTEMPT,
+                            SAGA_EVENT.DETAIL)
+                    .from(SAGA_EVENT)
+                    .where(SAGA_EVENT.SAGA_ID.eq(SAGA.ID))
+                    .orderBy(SAGA_EVENT.ID))
+            .convertFrom(rows -> rows.map(mapping((id, at, type, step, action, attempt, detail) ->
+                    new EventView(id, at.withOffsetSameInstant(ZoneOffset.UTC), type, step, action, attempt, detail))));
 
-    TransferViews(JdbcClient jdbc) {
-        this.jdbc = jdbc;
+    private final DSLContext db;
+
+    TransferViews(DSLContext db) {
+        this.db = db;
     }
 
     public Optional<TransferView> find(UUID id) {
-        return jdbc.sql(SUMMARY + " WHERE id = ?")
-                .param(id)
-                .query(TransferViews::summary)
-                .optional()
-                .map(summary -> new TransferView(summary, steps(id), events(id)));
+        return db.select(SAGA, STEPS, EVENTS)
+                .from(SAGA)
+                .where(SAGA.ID.eq(id))
+                .fetchOptional(row -> new TransferView(summary(row.value1()), row.value2(), row.value3()));
     }
 
     public List<TransferSummary> recent(int limit) {
-        return jdbc.sql(SUMMARY + " ORDER BY created_at DESC LIMIT ?")
-                .param(limit)
-                .query(TransferViews::summary)
-                .list();
+        return db.selectFrom(SAGA).orderBy(SAGA.CREATED_AT.desc()).limit(limit).fetch(TransferViews::summary);
     }
 
-    private List<StepView> steps(UUID id) {
-        return jdbc.sql("SELECT step, status FROM saga_step WHERE saga_id = ? ORDER BY position")
-                .param(id)
-                .query((rs, _) -> {
-                    var step = Step.valueOf(rs.getString("step"));
-                    return new StepView(step, serviceOf(step), StepStatus.valueOf(rs.getString("status")));
-                })
-                .list();
+    private static TransferSummary summary(SagaRecord saga) {
+        return new TransferSummary(
+                saga.getId(), saga.getStatus(), SagaStore.termsOf(saga), saga.getReason(), saga.getCreatedAt());
     }
 
     private static String serviceOf(Step step) {
@@ -60,39 +74,6 @@ public class TransferViews {
                         .map(participant -> participant.name().toLowerCase(Locale.ROOT))
                         .orElse("transfer")
                 + "-service";
-    }
-
-    private List<EventView> events(UUID id) {
-        return jdbc.sql("""
-                        SELECT id, occurred_at, type, step, action, attempt, detail
-                        FROM saga_event WHERE saga_id = ? ORDER BY id
-                        """)
-                .param(id)
-                .query((rs, _) -> new EventView(
-                        rs.getLong("id"),
-                        rs.getObject("occurred_at", OffsetDateTime.class),
-                        SagaEventType.valueOf(rs.getString("type")),
-                        enumOrNull(Step.class, rs.getString("step")),
-                        enumOrNull(Action.class, rs.getString("action")),
-                        rs.getInt("attempt"),
-                        rs.getString("detail")))
-                .list();
-    }
-
-    private static TransferSummary summary(ResultSet rs, int row) throws SQLException {
-        return new TransferSummary(
-                rs.getObject("id", UUID.class),
-                SagaStatus.valueOf(rs.getString("status")),
-                new TransferTerms(
-                        rs.getString("source_account_id"),
-                        rs.getString("destination_account_id"),
-                        new Money(rs.getBigDecimal("amount"), Currency.getInstance(rs.getString("currency")))),
-                rs.getString("reason"),
-                rs.getObject("created_at", OffsetDateTime.class));
-    }
-
-    private static <E extends Enum<E>> E enumOrNull(Class<E> type, String name) {
-        return name == null ? null : Enum.valueOf(type, name);
     }
 
     public record TransferSummary(

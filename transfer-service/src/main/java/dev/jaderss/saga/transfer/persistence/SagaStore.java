@@ -1,174 +1,174 @@
 package dev.jaderss.saga.transfer.persistence;
 
+import static dev.jaderss.saga.messaging.jooq.SqlTime.secondsSinceOldest;
+import static dev.jaderss.saga.transfer.persistence.db.Tables.SAGA;
+import static dev.jaderss.saga.transfer.persistence.db.Tables.SAGA_STEP;
+import static org.jooq.impl.DSL.inline;
+import static org.jooq.impl.DSL.row;
+
 import dev.jaderss.saga.messaging.contract.Fault;
 import dev.jaderss.saga.messaging.contract.Money;
-import dev.jaderss.saga.messaging.contract.Step;
 import dev.jaderss.saga.messaging.contract.TransferTerms;
 import dev.jaderss.saga.transfer.domain.SagaStatus;
-import dev.jaderss.saga.transfer.domain.StepStatus;
 import dev.jaderss.saga.transfer.domain.TransferOrder;
 import dev.jaderss.saga.transfer.domain.TransferSaga;
-import java.sql.ResultSet;
-import java.sql.SQLException;
+import dev.jaderss.saga.transfer.persistence.db.tables.records.SagaRecord;
 import java.time.OffsetDateTime;
 import java.util.Currency;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
-import org.springframework.jdbc.core.simple.JdbcClient;
+import java.util.stream.IntStream;
+import org.jooq.Condition;
+import org.jooq.DSLContext;
+import org.jooq.JSONB;
 import org.springframework.stereotype.Repository;
 import tools.jackson.databind.json.JsonMapper;
 
 @Repository
 public class SagaStore {
 
-    private static final String COLUMNS =
-            "id, source_account_id, destination_account_id, amount, currency, faults, requires_approval, status, current_step,"
-                    + " attempt, reason";
+    private static final Condition UNFINISHED =
+            SAGA.STATUS.in(inline(SagaStatus.RUNNING, SAGA.STATUS), inline(SagaStatus.COMPENSATING, SAGA.STATUS));
 
-    private final JdbcClient jdbc;
+    private final DSLContext db;
     private final JsonMapper json;
 
-    SagaStore(JdbcClient jdbc, JsonMapper json) {
-        this.jdbc = jdbc;
+    SagaStore(DSLContext db, JsonMapper json) {
+        this.db = db;
         this.json = json;
     }
 
     public void insert(TransferSaga saga, String idempotencyKey, OffsetDateTime now, OffsetDateTime deadline) {
         var order = saga.order();
         var terms = order.terms();
-        jdbc.sql("""
-                        INSERT INTO saga (id, idempotency_key, source_account_id, destination_account_id, amount, currency,
-                                          faults, requires_approval, status, current_step, current_action, attempt,
-                                          deadline, reason, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """)
-                .params(
-                        order.id(),
-                        idempotencyKey,
-                        terms.sourceAccountId(),
-                        terms.destinationAccountId(),
-                        terms.amount().amount(),
-                        terms.amount().currency().getCurrencyCode(),
-                        json.writeValueAsString(order.faults()),
-                        order.requiresApproval(),
-                        saga.status().name(),
-                        saga.currentStep().name(),
-                        saga.currentAction().name(),
-                        saga.attempt(),
-                        deadline,
-                        saga.reason(),
-                        now,
-                        now)
-                .update();
-        for (var position = 0; position < saga.plan().size(); position++) {
-            jdbc.sql("INSERT INTO saga_step (saga_id, position, step, status) VALUES (?, ?, ?, ?)")
-                    .params(
-                            order.id(),
-                            position,
-                            saga.plan().get(position).name(),
-                            saga.steps().get(position).name())
-                    .update();
-        }
+        db.insertInto(SAGA)
+                .set(SAGA.ID, order.id())
+                .set(SAGA.IDEMPOTENCY_KEY, idempotencyKey)
+                .set(SAGA.SOURCE_ACCOUNT_ID, terms.sourceAccountId())
+                .set(SAGA.DESTINATION_ACCOUNT_ID, terms.destinationAccountId())
+                .set(SAGA.AMOUNT, terms.amount().amount())
+                .set(SAGA.CURRENCY, terms.amount().currency().getCurrencyCode())
+                .set(SAGA.FAULTS, JSONB.valueOf(json.writeValueAsString(order.faults())))
+                .set(SAGA.REQUIRES_APPROVAL, order.requiresApproval())
+                .set(SAGA.STATUS, saga.status())
+                .set(SAGA.CURRENT_STEP, saga.currentStep())
+                .set(SAGA.CURRENT_ACTION, saga.currentAction())
+                .set(SAGA.ATTEMPT, saga.attempt())
+                .set(SAGA.DEADLINE, deadline)
+                .set(SAGA.REASON, saga.reason())
+                .set(SAGA.CREATED_AT, now)
+                .set(SAGA.UPDATED_AT, now)
+                .execute();
+        db.insertInto(SAGA_STEP, SAGA_STEP.SAGA_ID, SAGA_STEP.POSITION, SAGA_STEP.STEP, SAGA_STEP.STATUS)
+                .valuesOfRows(IntStream.range(0, saga.plan().size())
+                        .mapToObj(position -> row(
+                                order.id(),
+                                position,
+                                saga.plan().get(position),
+                                saga.steps().get(position)))
+                        .toList())
+                .execute();
     }
 
     public void update(TransferSaga saga, OffsetDateTime now, OffsetDateTime deadline) {
         var id = saga.order().id();
-        jdbc.sql("""
-                        UPDATE saga SET status = ?, current_step = ?, current_action = ?, attempt = ?, deadline = ?,
-                                        reason = ?, updated_at = ?
-                        WHERE id = ?
-                        """)
-                .params(
-                        saga.status().name(),
-                        saga.currentStep().name(),
-                        saga.currentAction().name(),
-                        saga.attempt(),
-                        deadline,
-                        saga.reason(),
-                        now,
-                        id)
-                .update();
-        for (var position = 0; position < saga.steps().size(); position++) {
-            jdbc.sql("UPDATE saga_step SET status = ? WHERE saga_id = ? AND position = ? AND status <> ?")
-                    .params(
-                            saga.steps().get(position).name(),
-                            id,
-                            position,
-                            saga.steps().get(position).name())
-                    .update();
-        }
+        db.update(SAGA)
+                .set(SAGA.STATUS, saga.status())
+                .set(SAGA.CURRENT_STEP, saga.currentStep())
+                .set(SAGA.CURRENT_ACTION, saga.currentAction())
+                .set(SAGA.ATTEMPT, saga.attempt())
+                .set(SAGA.DEADLINE, deadline)
+                .set(SAGA.REASON, saga.reason())
+                .set(SAGA.UPDATED_AT, now)
+                .where(SAGA.ID.eq(id))
+                .execute();
+        db.batch(IntStream.range(0, saga.steps().size())
+                        .mapToObj(position -> db.update(SAGA_STEP)
+                                .set(SAGA_STEP.STATUS, saga.steps().get(position))
+                                .where(
+                                        SAGA_STEP.SAGA_ID.eq(id),
+                                        SAGA_STEP.POSITION.eq(position),
+                                        SAGA_STEP.STATUS.ne(saga.steps().get(position))))
+                        .toList())
+                .execute();
     }
 
     public Optional<TransferSaga> lock(UUID id) {
-        return jdbc.sql("SELECT " + COLUMNS + " FROM saga WHERE id = ? FOR UPDATE")
-                .param(id)
-                .query(this::order)
-                .optional()
+        return db.selectFrom(SAGA)
+                .where(SAGA.ID.eq(id))
+                .forUpdate()
+                .fetchOptional(this::loaded)
                 .map(this::withSteps);
     }
 
     public Optional<TransferOrder> findOrder(String idempotencyKey) {
-        return jdbc.sql("SELECT " + COLUMNS + " FROM saga WHERE idempotency_key = ?")
-                .param(idempotencyKey)
-                .query(this::order)
-                .optional()
+        return db.selectFrom(SAGA)
+                .where(SAGA.IDEMPOTENCY_KEY.eq(idempotencyKey))
+                .fetchOptional(this::loaded)
                 .map(Loaded::order);
     }
 
     public List<UUID> dueIds(OffsetDateTime now, int limit) {
-        return jdbc.sql("""
-                        SELECT id FROM saga
-                        WHERE status IN ('RUNNING', 'COMPENSATING') AND deadline < ?
-                        ORDER BY deadline LIMIT ?
-                        """).params(now, limit).query(UUID.class).list();
+        return db.select(SAGA.ID)
+                .from(SAGA)
+                .where(UNFINISHED, SAGA.DEADLINE.lt(now))
+                .orderBy(SAGA.DEADLINE)
+                .limit(limit)
+                .fetch(SAGA.ID);
     }
 
     public Optional<TransferSaga> lockIfDue(UUID id, OffsetDateTime now) {
-        return jdbc.sql("SELECT " + COLUMNS + """
-                         FROM saga
-                        WHERE id = ? AND status IN ('RUNNING', 'COMPENSATING') AND deadline < ?
-                        FOR UPDATE SKIP LOCKED
-                        """)
-                .params(id, now)
-                .query(this::order)
-                .optional()
+        return db.selectFrom(SAGA)
+                .where(SAGA.ID.eq(id), UNFINISHED, SAGA.DEADLINE.lt(now))
+                .forUpdate()
+                .skipLocked()
+                .fetchOptional(this::loaded)
                 .map(this::withSteps);
     }
 
     public void postpone(UUID id, OffsetDateTime deadline) {
-        jdbc.sql("UPDATE saga SET deadline = ? WHERE id = ?")
-                .params(deadline, id)
-                .update();
+        db.update(SAGA).set(SAGA.DEADLINE, deadline).where(SAGA.ID.eq(id)).execute();
+    }
+
+    public int count(SagaStatus status) {
+        return db.fetchCount(SAGA, SAGA.STATUS.eq(status));
+    }
+
+    public double secondsSinceOldestIn(SagaStatus status) {
+        return db.select(secondsSinceOldest(SAGA.CREATED_AT))
+                .from(SAGA)
+                .where(SAGA.STATUS.eq(status))
+                .fetchSingle()
+                .value1();
+    }
+
+    static TransferTerms termsOf(SagaRecord saga) {
+        return new TransferTerms(
+                saga.getSourceAccountId(),
+                saga.getDestinationAccountId(),
+                new Money(saga.getAmount(), Currency.getInstance(saga.getCurrency())));
     }
 
     private TransferSaga withSteps(Loaded loaded) {
-        var steps = jdbc
-                .sql("SELECT status FROM saga_step WHERE saga_id = ? ORDER BY position")
-                .param(loaded.order().id())
-                .query(String.class)
-                .list()
-                .stream()
-                .map(StepStatus::valueOf)
-                .toList();
+        var steps = db.select(SAGA_STEP.STATUS)
+                .from(SAGA_STEP)
+                .where(SAGA_STEP.SAGA_ID.eq(loaded.order().id()))
+                .orderBy(SAGA_STEP.POSITION)
+                .fetch(SAGA_STEP.STATUS);
         return new TransferSaga(
                 loaded.order(), loaded.status(), steps, loaded.cursor(), loaded.attempt(), loaded.reason());
     }
 
-    private Loaded order(ResultSet rs, int row) throws SQLException {
-        var terms = new TransferTerms(
-                rs.getString("source_account_id"),
-                rs.getString("destination_account_id"),
-                new Money(rs.getBigDecimal("amount"), Currency.getInstance(rs.getString("currency"))));
-        var faults = List.of(json.readValue(rs.getString("faults"), Fault[].class));
-        var order =
-                new TransferOrder(rs.getObject("id", UUID.class), terms, faults, rs.getBoolean("requires_approval"));
+    private Loaded loaded(SagaRecord saga) {
+        var faults = List.of(json.readValue(saga.getFaults().data(), Fault[].class));
+        var order = new TransferOrder(saga.getId(), termsOf(saga), faults, saga.getRequiresApproval());
         return new Loaded(
                 order,
-                SagaStatus.valueOf(rs.getString("status")),
-                TransferSaga.planOf(order).indexOf(Step.valueOf(rs.getString("current_step"))),
-                rs.getInt("attempt"),
-                rs.getString("reason"));
+                saga.getStatus(),
+                TransferSaga.planOf(order).indexOf(saga.getCurrentStep()),
+                saga.getAttempt(),
+                saga.getReason());
     }
 
     private record Loaded(TransferOrder order, SagaStatus status, int cursor, int attempt, String reason) {}

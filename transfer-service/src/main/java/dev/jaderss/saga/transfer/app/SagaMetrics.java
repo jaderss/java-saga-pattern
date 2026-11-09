@@ -1,40 +1,34 @@
 package dev.jaderss.saga.transfer.app;
 
+import dev.jaderss.saga.transfer.domain.SagaStatus;
+import dev.jaderss.saga.transfer.persistence.SagaStore;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.binder.MeterBinder;
-import java.util.List;
-import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Component;
 
 @Component
 class SagaMetrics implements MeterBinder {
 
-    private final JdbcClient jdbc;
+    private final SagaStore sagas;
 
-    SagaMetrics(JdbcClient jdbc) {
-        this.jdbc = jdbc;
+    SagaMetrics(SagaStore sagas) {
+        this.sagas = sagas;
     }
 
     @Override
     public void bindTo(MeterRegistry registry) {
-        for (var status : List.of("RUNNING", "COMPENSATING")) {
-            Gauge.builder("saga.active", () -> number("SELECT count(*) FROM saga WHERE status = ?", status))
-                    .tag("status", status)
-                    .description("Sagas not finished yet")
-                    .register(registry);
+        for (var status : SagaStatus.values()) {
+            if (!status.terminal()) {
+                Gauge.builder("saga.active", () -> sagas.count(status))
+                        .tag("status", status.name())
+                        .description("Sagas not finished yet")
+                        .register(registry);
+            }
         }
-        Gauge.builder(
-                        "saga.compensating.oldest.age",
-                        () -> number(
-                                "SELECT coalesce(extract(epoch FROM now() - min(created_at)), 0) FROM saga WHERE status = ?",
-                                "COMPENSATING"))
+        Gauge.builder("saga.compensating.oldest.age", () -> sagas.secondsSinceOldestIn(SagaStatus.COMPENSATING))
                 .baseUnit("seconds")
                 .description("Age of the oldest saga still compensating")
                 .register(registry);
-    }
-
-    private Number number(String sql, String status) {
-        return jdbc.sql(sql).param(status).query(Double.class).single();
     }
 }

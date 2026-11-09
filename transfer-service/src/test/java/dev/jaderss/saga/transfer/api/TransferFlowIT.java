@@ -6,6 +6,7 @@ import static org.awaitility.Awaitility.await;
 import dev.jaderss.saga.messaging.test.SagaContainers;
 import dev.jaderss.saga.transfer.ScriptedParticipantsConfig;
 import dev.jaderss.saga.transfer.ScriptedParticipantsConfig.Scripted;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.net.URI;
@@ -45,6 +46,9 @@ class TransferFlowIT {
     @Autowired
     Scripted participants;
 
+    @Autowired
+    MeterRegistry meters;
+
     @Test
     void completes_a_transfer_through_all_four_steps() throws Exception {
         var id = start(UUID.randomUUID().toString(), body("ACC-1", "ACC-2", "10.00"))
@@ -55,6 +59,10 @@ class TransferFlowIT {
         var view = awaitStatus(id, "COMPLETED");
 
         assertThat(view.get("steps").findValuesAsString("status")).containsOnly("SUCCEEDED");
+        assertThat(view.get("events").valueStream().map(event -> event.get("id").asLong()))
+                .isSorted();
+        assertThat(view.get("events").findValuesAsString("at"))
+                .allSatisfy(at -> assertThat(at).endsWith("Z"));
         assertThat(participants.trail(id))
                 .containsExactly(
                         "E:RESERVE_LIMIT#1", "E:DEBIT_SOURCE#1", "E:CREDIT_DESTINATION#1", "E:CLEAR_TRANSFER#1");
@@ -137,6 +145,8 @@ class TransferFlowIT {
         var declined = startWithApproval();
         awaitStep(approved, "APPROVE_TRANSFER", "IN_PROGRESS");
         awaitStep(declined, "APPROVE_TRANSFER", "IN_PROGRESS");
+        assertThat(meters.get("saga.active").tag("status", "RUNNING").gauge().value())
+                .isGreaterThanOrEqualTo(2);
 
         assertThat(post("/api/transfers/" + approved + "/approve").statusCode()).isEqualTo(200);
         assertThat(post("/api/transfers/" + declined + "/decline").statusCode()).isEqualTo(200);
