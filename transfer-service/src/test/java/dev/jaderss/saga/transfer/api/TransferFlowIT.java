@@ -63,6 +63,7 @@ class TransferFlowIT {
                 .isSorted();
         assertThat(view.get("events").findValuesAsString("at"))
                 .allSatisfy(at -> assertThat(at).endsWith("Z"));
+        assertThat(view.get("transfer").get("createdAt").asString()).endsWith("Z");
         assertThat(participants.trail(id))
                 .containsExactly(
                         "E:RESERVE_LIMIT#1", "E:DEBIT_SOURCE#1", "E:CREDIT_DESTINATION#1", "E:CLEAR_TRANSFER#1");

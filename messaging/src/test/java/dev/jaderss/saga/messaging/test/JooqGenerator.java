@@ -1,5 +1,6 @@
 package dev.jaderss.saga.messaging.test;
 
+import java.nio.file.Path;
 import java.util.List;
 import org.flywaydb.core.Flyway;
 import org.jooq.codegen.GenerationTool;
@@ -25,7 +26,7 @@ public final class JooqGenerator {
                 .withIncludeExpression(columns);
     }
 
-    public static void generate(String packageName, List<String> flywayLocations, ForcedType... forcedTypes)
+    public static Path generate(String packageName, List<String> flywayLocations, ForcedType... forcedTypes)
             throws Exception {
         try (var postgres = new PostgreSQLContainer(SagaContainers.POSTGRES_IMAGE)) {
             postgres.start();
@@ -53,6 +54,7 @@ public final class JooqGenerator {
                                     .withPackageName(packageName)
                                     .withDirectory(TARGET_DIRECTORY)
                                     .withClean(true))));
+            return Path.of(TARGET_DIRECTORY, packageName.replace('.', '/'));
         }
     }
 }

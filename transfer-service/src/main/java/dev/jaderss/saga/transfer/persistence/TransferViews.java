@@ -45,7 +45,7 @@ public class TransferViews {
                     .where(SAGA_EVENT.SAGA_ID.eq(SAGA.ID))
                     .orderBy(SAGA_EVENT.ID))
             .convertFrom(rows -> rows.map(mapping((id, at, type, step, action, attempt, detail) ->
-                    new EventView(id, at.withOffsetSameInstant(ZoneOffset.UTC), type, step, action, attempt, detail))));
+                    new EventView(id, utc(at), type, step, action, attempt, detail))));
 
     private final DSLContext db;
 
@@ -66,7 +66,11 @@ public class TransferViews {
 
     private static TransferSummary summary(SagaRecord saga) {
         return new TransferSummary(
-                saga.getId(), saga.getStatus(), SagaStore.termsOf(saga), saga.getReason(), saga.getCreatedAt());
+                saga.getId(), saga.getStatus(), SagaStore.termsOf(saga), saga.getReason(), utc(saga.getCreatedAt()));
+    }
+
+    private static OffsetDateTime utc(OffsetDateTime timestamp) {
+        return timestamp.withOffsetSameInstant(ZoneOffset.UTC);
     }
 
     private static String serviceOf(Step step) {
