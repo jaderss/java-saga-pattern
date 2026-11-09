@@ -6,3 +6,4 @@ target/
 web/node_modules/
 web/dist/
 *.log
+.sonar/

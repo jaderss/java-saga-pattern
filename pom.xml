@@ -24,6 +24,9 @@
 
     <properties>
         <java.version>25</java.version>
+        <sonar.organization>jaderss</sonar.organization>
+        <sonar.projectKey>jaderss_java-saga-pattern</sonar.projectKey>
+        <sonar.host.url>https://sonarcloud.io</sonar.host.url>
         <archunit.version>1.5.1</archunit.version>
         <jqwik.version>1.10.2</jqwik.version>
         <jacoco.version>0.8.16</jacoco.version>
